@@ -18,6 +18,7 @@ TlsTransport::~TlsTransport() {
 }
 
 bool TlsTransport::Connect(const char* host, int port) {
+    ESP_LOGI(TAG, "Connecting to %s:%d", host, port);
     esp_tls_cfg_t cfg = {};
     cfg.crt_bundle_attach = esp_crt_bundle_attach;
 

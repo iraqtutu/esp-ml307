@@ -28,13 +28,13 @@ bool EspHttp::Open(const std::string& method, const std::string& url, const std:
     config.timeout_ms = 15000;  // 设置连接超时时间为15秒
     config.buffer_size = 4096;  // 缓冲区大小
     config.skip_cert_common_name_check = true;  // 跳过证书通用名称检查
-    config.keep_alive_enable = false;  // 禁用keep-alive
+    config.keep_alive_enable = true;  // 禁用keep-alive
     config.disable_auto_redirect = false;  // 允许自动重定向
     config.event_handler = HttpEventHandler;  // 事件处理器
     config.user_data = this;
-    
+
     // 允许自动选择连接类型 (IPv4或IPv6)
-    config.transport_type = HTTP_TRANSPORT_UNKNOWN; // 让ESP-IDF自动选择连接类型
+    config.transport_type = HTTP_TRANSPORT_OVER_TCP; // 让ESP-IDF自动选择连接类型
     config.is_async = false; // 使用同步模式，便于控制
     
     ESP_LOGI(TAG, "允许自动选择连接类型 (IPv4或IPv6)");
@@ -46,78 +46,15 @@ bool EspHttp::Open(const std::string& method, const std::string& url, const std:
 
     ESP_LOGI(TAG, "Opening HTTP connection to %s (timeout: %d ms)", url.c_str(), config.timeout_ms);
 
-    // 解析主机和路径用于日志显示
-    std::string host;
-    size_t host_start = url.find("://");
-    if (host_start != std::string::npos) {
-        host_start += 3;
-        size_t host_end = url.find("/", host_start);
-        if (host_end != std::string::npos) {
-            host = url.substr(host_start, host_end - host_start);
-        } else {
-            host = url.substr(host_start);
-        }
-        ESP_LOGI(TAG, "解析到主机地址: %s", host.c_str());
-    }
-
     ESP_LOGI(TAG, "HTTP 方法: %s, 内容长度: %zu", method.c_str(), content.length());
 
     // 尝试DNS预解析（仅打印，不影响后续操作）
-    struct addrinfo hints = {}, *res = NULL;
-    hints.ai_family = AF_INET6;  // 优先使用IPv6
-    hints.ai_socktype = SOCK_STREAM;
-    if (host.length() > 0) {
-        ESP_LOGI(TAG, "正在进行DNS解析（IPv6优先）: %s", host.c_str());
-        int err = getaddrinfo(host.c_str(), NULL, &hints, &res);
-        if (err != 0 || res == NULL) {
-            ESP_LOGW(TAG, "IPv6 DNS解析失败: %s (错误: %d)", host.c_str(), err);
-            
-            // 尝试使用IPv4解析
-            hints.ai_family = AF_INET;
-            ESP_LOGI(TAG, "尝试使用IPv4进行DNS解析: %s", host.c_str());
-            err = getaddrinfo(host.c_str(), NULL, &hints, &res);
-            if (err != 0 || res == NULL) {
-                ESP_LOGE(TAG, "IPv4 DNS解析也失败: %s (错误: %d)", host.c_str(), err);
-            } else {
-                char addr_str[128];
-                void* addr = &((struct sockaddr_in*)res->ai_addr)->sin_addr;
-                inet_ntop(res->ai_family, addr, addr_str, sizeof(addr_str));
-                ESP_LOGI(TAG, "DNS解析结果: %s (IPv4: %s)", host.c_str(), addr_str);
-                ESP_LOGW(TAG, "注意：仅有IPv4地址可能导致连接问题，如果目标服务器只支持IPv6");
-                freeaddrinfo(res);
-            }
-        } else {
-            // 输出所有解析到的地址
-            ESP_LOGI(TAG, "DNS解析结果:");
-            bool has_ipv6 = false;
-            for (struct addrinfo* p = res; p != NULL; p = p->ai_next) {
-                char addr_str[128];
-                void* addr;
-                const char* addr_type;
-                
-                if (p->ai_family == AF_INET) {
-                    addr = &((struct sockaddr_in*)p->ai_addr)->sin_addr;
-                    addr_type = "IPv4";
-                } else {
-                    addr = &((struct sockaddr_in6*)p->ai_addr)->sin6_addr;
-                    addr_type = "IPv6";
-                    has_ipv6 = true;
-                }
-                
-                inet_ntop(p->ai_family, addr, addr_str, sizeof(addr_str));
-                ESP_LOGI(TAG, "  - %s: %s", addr_type, addr_str);
-            }
-            
-            if (has_ipv6) {
-                ESP_LOGI(TAG, "有IPv6地址可用，将优先使用IPv6连接");
-            } else {
-                ESP_LOGW(TAG, "没有找到IPv6地址，如果目标服务器只支持IPv6，连接可能会失败");
-            }
-            
-            freeaddrinfo(res);
-        }
+    bool has_ipv6 = this->resolve_url(url.c_str());
+    if (has_ipv6) {
+        ESP_LOGI(TAG, "目标支持IPv6访问");
+    } else {
+        ESP_LOGI(TAG, "目标可能不支持IPv6，将尝试IPv4");
     }
-
     // 多次尝试连接
     while (retry_count < max_connect_retries) {
         if (retry_count > 0) {
@@ -149,6 +86,7 @@ bool EspHttp::Open(const std::string& method, const std::string& url, const std:
         }
 
         // 尝试打开连接
+        ESP_LOGI(TAG, "尝试打开连接，Method = %s, content.length() = %d", method.c_str(), content.length());
         last_err = esp_http_client_open(client_, content.length());
         if (last_err == ESP_OK) {
             ESP_LOGI(TAG, "HTTP连接成功建立");
@@ -244,4 +182,90 @@ esp_err_t EspHttp::HttpEventHandler(esp_http_client_event_t *evt) {
             break;
     }
     return ESP_OK;
+}
+
+bool EspHttp::resolve_url(const char *url) {
+    // 1. 解析URL以提取主机名
+    const char *protocol_end = strstr(url, "://");
+    if (!protocol_end) {
+        ESP_LOGE(TAG, "URL格式无效: %s", url);
+        return false;
+    }
+    
+    protocol_end += 3; // 跳过"://"
+    
+    // 检查是否有IPv6地址格式 [xxxx:xxxx::xxxx]
+    bool is_ipv6_format = false;
+    const char *host_start = protocol_end;
+    if (*host_start == '[') {
+        is_ipv6_format = true;
+        host_start++; // 跳过'['
+    }
+    
+    const char *host_end;
+    if (is_ipv6_format) {
+        host_end = strchr(host_start, ']');
+        if (!host_end) {
+            ESP_LOGE(TAG, "IPv6地址格式错误: %s", url);
+            return false;
+        }
+    } else {
+        // 寻找主机名结束位置（端口号、路径或结束符）
+        host_end = strchr(host_start, ':'); // 检查端口
+        const char *path = strchr(host_start, '/');
+        
+        if (host_end == NULL || (path != NULL && path < host_end)) {
+            host_end = path;
+        }
+        
+        if (host_end == NULL) {
+            host_end = host_start + strlen(host_start);
+        }
+    }
+    
+    // 提取主机名
+    size_t hostname_len = host_end - host_start;
+    char hostname[256] = {0};
+    if (hostname_len >= sizeof(hostname)) {
+        ESP_LOGE(TAG, "主机名太长");
+        return false;
+    }
+    strncpy(hostname, host_start, hostname_len);
+    hostname[hostname_len] = '\0';
+    
+    ESP_LOGI(TAG, "从URL提取的主机名: %s", hostname);
+    
+    // 2. 解析提取的主机名
+    struct addrinfo hints = {}, *res;
+    hints.ai_family = AF_UNSPEC;  // 同时支持IPv4和IPv6
+    hints.ai_socktype = SOCK_STREAM;
+    
+    int err = getaddrinfo(hostname, "80", &hints, &res);
+    if (err != 0) {
+        ESP_LOGE(TAG, "DNS解析失败: %d", err);
+        return false;
+    }
+    
+    // 打印解析结果
+    bool found_ipv6 = false;
+    for (struct addrinfo *p = res; p != NULL; p = p->ai_next) {
+        char ipstr[INET6_ADDRSTRLEN];
+        void *addr;
+        
+        if (p->ai_family == AF_INET) { // IPv4
+            struct sockaddr_in *ipv4 = (struct sockaddr_in *)p->ai_addr;
+            addr = &(ipv4->sin_addr);
+            inet_ntop(AF_INET, addr, ipstr, sizeof(ipstr));
+            ESP_LOGI(TAG, "解析到IPv4地址: %s", ipstr);
+        } else if (p->ai_family == AF_INET6) { // IPv6
+            struct sockaddr_in6 *ipv6 = (struct sockaddr_in6 *)p->ai_addr;
+            addr = &(ipv6->sin6_addr);
+            inet_ntop(AF_INET6, addr, ipstr, sizeof(ipstr));
+            ESP_LOGI(TAG, "解析到IPv6地址: %s", ipstr);
+            found_ipv6 = true;
+        }
+    }
+    
+    freeaddrinfo(res);
+    return found_ipv6; // 如果找到IPv6地址则返回true
 }

@@ -15,7 +15,7 @@ public:
     void SetHeader(const std::string& key, const std::string& value) override;
     bool Open(const std::string& method, const std::string& url, const std::string& content = "") override;
     void Close() override;
-
+    bool resolve_url(const char* url);
     int GetStatusCode() const override;
     std::string GetResponseHeader(const std::string& key) const override;
     size_t GetBodyLength() const override;
