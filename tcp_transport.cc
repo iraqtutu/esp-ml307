@@ -18,7 +18,7 @@ TcpTransport::~TcpTransport() {
 bool TcpTransport::Connect(const char* host, int port) {
     struct sockaddr_in server_addr;
     bzero(&server_addr, sizeof(server_addr));
-    server_addr.sin_family = AF_UNSPEC;
+    server_addr.sin_family = AF_INET;
     server_addr.sin_port = htons(port);
     // host is domain
     struct hostent *server = gethostbyname(host);
@@ -28,7 +28,7 @@ bool TcpTransport::Connect(const char* host, int port) {
     }
     memcpy(&server_addr.sin_addr, server->h_addr, server->h_length);
 
-    fd_ = socket(AF_UNSPEC, SOCK_STREAM, 0);
+    fd_ = socket(AF_INET, SOCK_STREAM, 0);
     if (fd_ < 0) {
         ESP_LOGE(TAG, "Failed to create socket");
         return false;

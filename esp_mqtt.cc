@@ -24,17 +24,17 @@ bool EspMqtt::Connect(const std::string broker_address, int broker_port, const s
     esp_mqtt_client_config_t mqtt_config = {};
     mqtt_config.broker.address.hostname = broker_address.c_str();
     mqtt_config.broker.address.port = broker_port;
+    mqtt_config.broker.address.path = "/mqtt";
     if (broker_port == 8883) {
         mqtt_config.broker.address.transport = MQTT_TRANSPORT_OVER_SSL;
         mqtt_config.broker.verification.crt_bundle_attach = esp_crt_bundle_attach;
     } else {
-        mqtt_config.broker.address.transport = MQTT_TRANSPORT_OVER_TCP;
+        mqtt_config.broker.address.transport = MQTT_TRANSPORT_OVER_WS;
     }
     mqtt_config.credentials.client_id = client_id.c_str();
     mqtt_config.credentials.username = username.c_str();
     mqtt_config.credentials.authentication.password = password.c_str();
     mqtt_config.session.keepalive = keep_alive_seconds_;
-
     mqtt_client_handle_ = esp_mqtt_client_init(&mqtt_config);
     esp_mqtt_client_register_event(mqtt_client_handle_, MQTT_EVENT_ANY, [](void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data) {
         ((EspMqtt*)handler_args)->MqttEventCallback(base, event_id, event_data);
